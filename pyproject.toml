@@ -1,0 +1,77 @@
+[project]
+name = "fieldblind"
+version = "0.1.0"
+description = "Local, fictional teaching demo for Broken Object Property Level Authorization."
+readme = "README.md"
+requires-python = "==3.13.*"
+dependencies = [
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "sqlalchemy>=2.0.36",
+    "uvicorn>=0.32",
+]
+
+# Exact versions live in uv.lock, which is committed and installed with `uv sync --frozen`.
+[dependency-groups]
+dev = [
+    "httpx>=0.28",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pyyaml>=6.0.2",
+    "ruff>=0.8",
+    "types-pyyaml>=6.0.12",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fieldblind"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "A",   # builtin shadowing
+    "ANN", # missing annotations
+    "ARG", # unused arguments
+    "B",   # bugbear
+    "C4",  # comprehensions
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "N",   # naming
+    "PL",  # pylint
+    "PT",  # pytest style
+    "PTH", # pathlib
+    "RET", # return simplification
+    "RUF", # ruff-specific
+    "S",   # bandit security rules
+    "SIM", # simplification
+    "TID", # tidy imports
+    "UP",  # pyupgrade
+    "W",   # pycodestyle warnings
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",    # assertions are the point of a test suite
+    "PLR2004", # fixed fixture literals are clearer inline
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unreachable = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
