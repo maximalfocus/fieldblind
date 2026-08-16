@@ -21,7 +21,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-install-project
 
-COPY README.md ./
+# The package metadata declares both, so the build needs them present.
+COPY README.md LICENSE ./
 COPY src ./src
 RUN uv sync --locked
 
