@@ -19,11 +19,11 @@ WORKDIR /app
 
 # Dependencies first, so editing the demo source does not re-resolve the locked environment.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project
+RUN uv sync --locked --no-install-project
 
 COPY README.md ./
 COPY src ./src
-RUN uv sync --frozen
+RUN uv sync --locked
 
 COPY tests ./tests
 COPY scripts ./scripts

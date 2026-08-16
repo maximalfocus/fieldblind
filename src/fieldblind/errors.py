@@ -17,6 +17,7 @@ ERROR_NOT_FOUND: Final = "not_found"
 ERROR_INVALID_REQUEST: Final = "invalid_request"
 ERROR_INTERNAL: Final = "internal_error"
 
+STATUS_OK: Final = 200
 STATUS_UNAUTHORIZED: Final = 401
 STATUS_NOT_FOUND: Final = 404
 STATUS_INVALID_REQUEST: Final = 400

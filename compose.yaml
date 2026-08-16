@@ -92,6 +92,28 @@ services:
       retries: 10
       start_period: 3s
 
+  # The guided walkthrough. It runs the fixed script against both services and exits nonzero if any
+  # expected status, key set, audit event, or state diff is missing. It shares the vulnerable
+  # service's profile, because seeing the contrast means starting the vulnerable service.
+  walkthrough:
+    <<: *containment
+    profiles:
+      - vulnerable
+    build:
+      context: .
+    image: fieldblind:local
+    # An entrypoint rather than a command, so `docker compose run --rm walkthrough --mode secure`
+    # appends the flag instead of replacing the whole invocation.
+    entrypoint:
+      - python
+      - -m
+      - fieldblind.walkthrough
+    depends_on:
+      secure:
+        condition: service_healthy
+      vulnerable:
+        condition: service_healthy
+
   # The single verification entry point: formatting, linting, strict typing, and the test suite,
   # all inside the same pinned image. It publishes no port, and its profile keeps it out of
   # `docker compose up` so the secure service is the only default service. `docker compose run`
