@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from fieldblind.domain import CLAIM_FIXTURE, DEMO_CREDENTIALS, REVIEWER_ONLY_PROPERTIES
-from fieldblind.observability import EVENT_FIELDS, REASON_CODES
+from fieldblind.observability import AUDIT_HISTORY_LIMIT, EVENT_FIELDS, REASON_CODES
 from tests.support import CLAIM_PATH, NIKO_TOKEN, SOL_TOKEN, auth
 
 if TYPE_CHECKING:
@@ -81,3 +81,32 @@ def test_every_request_is_access_logged_without_content(service: LoopbackService
     assert set(completed[-1]) == {"event", "request_id", "method", "status"}
     assert completed[-1]["method"] == "GET"
     assert completed[-1]["status"] == 200
+
+
+def test_the_demonstration_event_view_matches_the_emitted_event(
+    service: LoopbackService,
+) -> None:
+    service.client.post("/demo/reset")
+    service.client.patch(CLAIM_PATH, headers=auth(NIKO_TOKEN), json=MIXED_BODY)
+    exposed = service.client.get("/demo/events").json()["events"]
+    assert len(exposed) == 1
+    assert exposed[0] == service.logs.events(REJECTED)[-1]
+
+
+def test_the_audit_history_stays_bounded(service: LoopbackService) -> None:
+    """Bounded on purpose: this is a fixed teaching fixture, not an audit store."""
+    service.client.post("/demo/reset")
+    for _ in range(AUDIT_HISTORY_LIMIT + 5):
+        service.client.patch(CLAIM_PATH, headers=auth(NIKO_TOKEN), json=MIXED_BODY)
+    exposed = service.client.get("/demo/events").json()["events"]
+    assert len(exposed) == AUDIT_HISTORY_LIMIT
+
+
+def test_the_demonstration_event_view_leaks_nothing(service: LoopbackService) -> None:
+    service.client.patch(CLAIM_PATH, headers=auth(NIKO_TOKEN), json=MIXED_BODY)
+    body = service.client.get("/demo/events").text
+    for name in REVIEWER_ONLY_PROPERTIES:
+        assert name not in body
+    assert "purpose" not in body
+    for credential in DEMO_CREDENTIALS:
+        assert credential not in body

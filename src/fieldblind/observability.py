@@ -12,13 +12,19 @@ import json
 import logging
 import sys
 import uuid
+from collections import deque
 from contextvars import ContextVar
 from typing import Final
 
 LOGGER_NAME: Final = "fieldblind"
 
+#: How many audit events the demonstration boundary keeps. Bounded on purpose: this is a fixed
+#: teaching fixture, not an audit store.
+AUDIT_HISTORY_LIMIT: Final = 32
+
 _logger: Final = logging.getLogger(LOGGER_NAME)
 _request_id: ContextVar[str] = ContextVar("fieldblind_request_id", default="-")
+_audit_history: Final[deque[dict[str, str | int]]] = deque(maxlen=AUDIT_HISTORY_LIMIT)
 
 #: The only event names this service emits.
 EVENT_REQUEST_COMPLETED: Final = "request_completed"
@@ -106,13 +112,31 @@ def log_property_update_rejected(actor_id: str, object_id: str, reason_code: str
     if reason_code not in REASON_CODES:
         message = f"unbounded audit reason code: {reason_code}"
         raise ValueError(message)
-    _emit(
-        {
-            "event": EVENT_PROPERTY_UPDATE_REJECTED,
-            "request_id": current_request_id(),
-            "actor_id": actor_id,
-            "object_id": object_id,
-            "outcome": "rejected",
-            "reason_code": reason_code,
-        },
-    )
+    payload: dict[str, str | int] = {
+        "event": EVENT_PROPERTY_UPDATE_REJECTED,
+        "request_id": current_request_id(),
+        "actor_id": actor_id,
+        "object_id": object_id,
+        "outcome": "rejected",
+        "reason_code": reason_code,
+    }
+    _audit_history.append(payload)
+    _emit(payload)
+
+
+def recent_audit_events() -> list[dict[str, str | int]]:
+    """Return the bounded audit history the demonstration boundary exposes.
+
+    These are the same already-redacted events that reach the log: no credential, request body,
+    property name, or property value has ever been in them.
+    """
+    return list(_audit_history)
+
+
+def clear_audit_events() -> None:
+    """Drop the audit history so a fresh demonstration case counts from zero.
+
+    The history is bounded, so counting a delta across a full ring would silently read zero. Cases
+    reset it and then assert an absolute count instead.
+    """
+    _audit_history.clear()

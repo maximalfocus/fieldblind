@@ -26,8 +26,10 @@ from fieldblind.errors import (
 )
 from fieldblind.observability import (
     bind_request_id,
+    clear_audit_events,
     log_request_completed,
     new_request_id,
+    recent_audit_events,
 )
 from fieldblind.persistence import load_claim, reset_state
 from fieldblind.projections import canonical_state
@@ -98,6 +100,15 @@ def create_demo_router(engine: Engine, session_factory: sessionmaker[Session]) -
     @router.post("/demo/reset")
     def demo_reset() -> JSONResponse:
         reset_state(engine)
+        clear_audit_events()
         return JSONResponse(content={"label": DEMO_LABEL, "reset": True})
+
+    @router.get("/demo/events")
+    def demo_events() -> JSONResponse:
+        """Return the bounded audit history so the walkthrough can assert event cardinality.
+
+        These are the same already-redacted events that reach the log.
+        """
+        return JSONResponse(content={"label": DEMO_LABEL, "events": recent_audit_events()})
 
     return router

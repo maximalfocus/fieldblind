@@ -42,7 +42,7 @@ def _services() -> dict[str, Any]:
     return services
 
 
-SERVICE_NAMES = ["secure", "vulnerable", "verify"]
+SERVICE_NAMES = ["secure", "vulnerable", "walkthrough", "verify"]
 
 
 # --- the two-action opt-in ------------------------------------------------------------------
