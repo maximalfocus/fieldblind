@@ -1,0 +1,44 @@
+name: fieldblind
+
+services:
+  # The secure service is the only service, and it is reachable from the host loopback only.
+  # The container listens on 0.0.0.0 inside its own network namespace because that is what a
+  # published port requires; the published address below is what decides host exposure.
+  secure:
+    build:
+      context: .
+    image: fieldblind:local
+    command:
+      - uvicorn
+      - fieldblind.secure_app:create_secure_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      FIELDBLIND_DB_PATH: /state/secure.db
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  # The single verification entry point: formatting, linting, strict typing, and the test suite,
+  # all inside the same pinned image. It publishes no port.
+  verify:
+    build:
+      context: .
+    image: fieldblind:local
+    environment:
+      FIELDBLIND_DB_PATH: /state/verify.db
+    command:
+      - sh
+      - scripts/verify.sh
