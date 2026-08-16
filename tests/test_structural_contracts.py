@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
-import yaml
 
 from fieldblind.domain import (
     CANONICAL_PROPERTY_ORDER,
@@ -39,7 +38,12 @@ if TYPE_CHECKING:
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = REPOSITORY_ROOT / "src" / "fieldblind"
+
+#: The one module allowed to serialize and bind generically. Everything else is the secure path.
+VULNERABLE_MODULES = frozenset({"vulnerable_app.py"})
+
 SOURCE_FILES = sorted(PACKAGE_ROOT.glob("*.py"))
+SECURE_SOURCE_FILES = [path for path in SOURCE_FILES if path.name not in VULNERABLE_MODULES]
 
 PUBLIC_MODELS: list[type[BaseModel]] = [
     EmployeeClaimResponse,
@@ -61,10 +65,11 @@ def _parsed(path: Path) -> ast.Module:
 
 
 def test_the_package_has_source_files_to_check() -> None:
-    assert SOURCE_FILES
+    assert SECURE_SOURCE_FILES
+    assert len(SECURE_SOURCE_FILES) < len(SOURCE_FILES)
 
 
-@pytest.mark.parametrize("path", SOURCE_FILES, ids=lambda path: path.name)
+@pytest.mark.parametrize("path", SECURE_SOURCE_FILES, ids=lambda path: path.name)
 def test_no_mapping_is_unpacked_into_a_call(path: Path) -> None:
     """`f(**untrusted)` is how whole-object binding gets in. It is banned outright."""
     for node in ast.walk(_parsed(path)):
@@ -74,7 +79,7 @@ def test_no_mapping_is_unpacked_into_a_call(path: Path) -> None:
             )
 
 
-@pytest.mark.parametrize("path", SOURCE_FILES, ids=lambda path: path.name)
+@pytest.mark.parametrize("path", SECURE_SOURCE_FILES, ids=lambda path: path.name)
 def test_no_dynamic_attribute_assignment(path: Path) -> None:
     """`setattr(claim, key, value)` is mass assignment with extra steps."""
     for node in ast.walk(_parsed(path)):
@@ -84,7 +89,7 @@ def test_no_dynamic_attribute_assignment(path: Path) -> None:
             )
 
 
-@pytest.mark.parametrize("path", SOURCE_FILES, ids=lambda path: path.name)
+@pytest.mark.parametrize("path", SECURE_SOURCE_FILES, ids=lambda path: path.name)
 def test_no_key_value_iteration(path: Path) -> None:
     """Iterating a caller-supplied mapping is the other half of whole-object binding."""
     for node in ast.walk(_parsed(path)):
@@ -163,23 +168,50 @@ def test_a_new_persistence_property_does_not_reach_a_public_contract() -> None:
         assert canary not in rendered
 
 
-def _compose() -> dict[str, Any]:
-    document: dict[str, Any] = yaml.safe_load(
-        (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8"),
-    )
-    return document
+def _imported_modules(path: Path) -> set[str]:
+    modules: set[str] = set()
+    for node in ast.walk(_parsed(path)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.add(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    return modules
 
 
-def test_only_one_service_is_published_and_only_to_loopback() -> None:
-    services: dict[str, Any] = _compose()["services"]
-    published = {name: spec["ports"] for name, spec in services.items() if spec.get("ports")}
-    assert list(published) == ["secure"]
-    for mappings in published.values():
-        for mapping in mappings:
-            assert str(mapping).startswith("127.0.0.1:")
+@pytest.mark.parametrize("path", SECURE_SOURCE_FILES, ids=lambda path: path.name)
+def test_no_secure_module_imports_the_vulnerable_one(path: Path) -> None:
+    """The flaws must be unreachable from the secure service, not merely unused by it."""
+    assert "fieldblind.vulnerable_app" not in _imported_modules(path)
 
 
-def test_no_intentionally_vulnerable_service_ships_in_this_slice() -> None:
-    services: dict[str, Any] = _compose()["services"]
-    assert set(services) == {"secure", "verify"}
-    assert not (PACKAGE_ROOT / "vulnerable_app.py").exists()
+def test_the_vulnerable_module_exists_and_is_the_only_excluded_one() -> None:
+    for name in VULNERABLE_MODULES:
+        assert (PACKAGE_ROOT / name).exists()
+
+
+@pytest.mark.parametrize("flaw", ["serialize_whole_object", "bind_whole_object"])
+def test_each_flaw_is_defined_only_in_the_vulnerable_module(flaw: str) -> None:
+    definitions = {
+        path.name
+        for path in SOURCE_FILES
+        for node in ast.walk(_parsed(path))
+        if isinstance(node, ast.FunctionDef) and node.name == flaw
+    }
+    assert definitions == {"vulnerable_app.py"}
+
+
+def test_the_vulnerable_module_reuses_the_shared_boundary() -> None:
+    """It must be the same product, differing only where the demonstration needs it to."""
+    imported = _imported_modules(PACKAGE_ROOT / "vulnerable_app.py")
+    assert "fieldblind.authentication" in imported
+    assert "fieldblind.object_policy" in imported
+    assert "fieldblind.demo_support" in imported
+
+
+def test_the_vulnerable_module_uses_no_secure_property_contract() -> None:
+    """If it borrowed the projections or the update contracts, it would not be vulnerable."""
+    imported = _imported_modules(PACKAGE_ROOT / "vulnerable_app.py")
+    assert "fieldblind.projections" not in imported
+    assert "fieldblind.schemas" not in imported
+    assert "fieldblind.service" not in imported

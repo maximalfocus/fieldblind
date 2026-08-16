@@ -27,7 +27,8 @@ RUN uv sync --frozen
 
 COPY tests ./tests
 COPY scripts ./scripts
-COPY compose.yaml ./
+# The containment suite asserts against the real deployment definitions, so they ship with it.
+COPY compose.yaml Dockerfile ./
 
 # The demo runs unprivileged and keeps its disposable database outside the source tree.
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin demo \

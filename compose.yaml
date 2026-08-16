@@ -1,10 +1,30 @@
 name: fieldblind
 
+# Containment applied to every container in this project: unprivileged, no capabilities, no way to
+# gain any, a read-only root filesystem, and state that lives only in tmpfs for the container's
+# lifetime. The `demo` network below gives the application no route off the host.
+#
+# A tmpfs mount takes the mode of the directory it covers and resets ownership to root, so /state is
+# given the demo user's ids explicitly. Without that the read-only rootfs leaves the service unable
+# to open its own database.
+x-containment: &containment
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /state:mode=0700,uid=10001,gid=10001
+    - /tmp:mode=1777
+  networks:
+    - demo
+
 services:
-  # The secure service is the only service, and it is reachable from the host loopback only.
+  # The secure service is the only default service, and it is reachable from the host loopback only.
   # The container listens on 0.0.0.0 inside its own network namespace because that is what a
   # published port requires; the published address below is what decides host exposure.
   secure:
+    <<: *containment
     build:
       context: .
     image: fieldblind:local
@@ -31,9 +51,55 @@ services:
       retries: 10
       start_period: 3s
 
+  # INTENTIONALLY VULNERABLE. Local teaching demo only, never run it anywhere else.
+  #
+  # Starting it takes two explicit actions and nothing less:
+  #   1. select the profile:  docker compose --profile vulnerable up
+  #   2. supply the flag:     ALLOW_VULNERABLE_DEMO=true
+  # The profile keeps it out of a plain `docker compose up`, and the value below is interpolated
+  # from the host environment — it is never enabled inside this file. The application refuses to
+  # start if the flag is missing, so neither action alone is enough.
+  #
+  # It keeps its own disposable database, so an attack case cannot contaminate the secure result.
+  vulnerable:
+    <<: *containment
+    profiles:
+      - vulnerable
+    build:
+      context: .
+    image: fieldblind:local
+    command:
+      - uvicorn
+      - fieldblind.vulnerable_app:create_vulnerable_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      FIELDBLIND_DB_PATH: /state/vulnerable.db
+      ALLOW_VULNERABLE_DEMO: ${ALLOW_VULNERABLE_DEMO:-}
+    ports:
+      - "127.0.0.1:8001:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
   # The single verification entry point: formatting, linting, strict typing, and the test suite,
-  # all inside the same pinned image. It publishes no port.
+  # all inside the same pinned image. It publishes no port, and its profile keeps it out of
+  # `docker compose up` so the secure service is the only default service. `docker compose run`
+  # enables the profile on its own.
   verify:
+    <<: *containment
+    profiles:
+      - verify
     build:
       context: .
     image: fieldblind:local
@@ -42,3 +108,13 @@ services:
     command:
       - sh
       - scripts/verify.sh
+
+networks:
+  # A bridge with IP masquerade disabled: the host can still reach a published port, and the
+  # container can still reach its own loopback, but nothing in it has a working route to any
+  # external network. `internal: true` would also block the published loopback ports the
+  # walkthrough needs, so containment is proved at runtime by the egress test in the suite.
+  demo:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 CLAIM_PATH: Final = f"/claims/{CLAIM_FIXTURE.claim_id}"
 DEMO_STATE_PATH: Final = f"/demo/state/{CLAIM_FIXTURE.claim_id}"
+DEMO_RESET_PATH: Final = "/demo/reset"
 UNKNOWN_CLAIM_PATH: Final = "/claims/EXP-999"
 
 TOKENS: Final[dict[str, str]] = {

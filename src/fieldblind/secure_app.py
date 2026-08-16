@@ -7,7 +7,8 @@ Request order is deliberate and identical for both demonstration variants:
 3. only then choose an actor-specific property contract.
 
 Steps 1 and 2 disclose nothing about the object's properties, so a caller who fails them learns
-nothing at all.
+nothing at all. Step 3 is where this service differs from its vulnerable twin: every property it
+emits or accepts is named in an explicit per-actor contract.
 """
 
 from __future__ import annotations
@@ -16,38 +17,26 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Final
 
 from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from fieldblind.authentication import resolve_actor
 from fieldblind.config import Settings
-from fieldblind.domain import DEMO_LABEL, Role
-from fieldblind.errors import (
-    ERROR_INVALID_REQUEST,
-    STATUS_NOT_FOUND,
-    STATUS_UNAUTHORIZED,
-    generic_error,
-    internal_error,
-    invalid_request,
-    not_found,
-    unauthorized,
+from fieldblind.demo_support import (
+    create_demo_router,
+    install_generic_error_handlers,
+    install_request_correlation,
 )
+from fieldblind.domain import Role
+from fieldblind.errors import internal_error, invalid_request, not_found, unauthorized
 from fieldblind.object_policy import may_access_claim
-from fieldblind.observability import (
-    bind_request_id,
-    configure_logging,
-    log_property_update_rejected,
-    log_request_completed,
-    new_request_id,
-)
+from fieldblind.observability import configure_logging, log_property_update_rejected
 from fieldblind.persistence import (
     create_database_engine,
     create_session_factory,
     load_claim,
     reset_state,
 )
-from fieldblind.projections import canonical_state, employee_projection, reviewer_projection
+from fieldblind.projections import employee_projection, reviewer_projection
 from fieldblind.service import (
     UpdateRejectedError,
     apply_employee_update,
@@ -58,9 +47,7 @@ from fieldblind.service import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
-
-    from starlette.responses import Response
+    from collections.abc import AsyncIterator
 
 SERVICE_TITLE: Final = "fieldblind secure claim service"
 
@@ -84,49 +71,9 @@ def create_secure_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url=None,
     )
-
-    @app.middleware("http")
-    async def correlate_and_log(
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:
-        bind_request_id(new_request_id())
-        response = await call_next(request)
-        log_request_completed(request.method, response.status_code)
-        return response
-
-    @app.exception_handler(StarletteHTTPException)
-    async def handle_http_exception(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
-        if exc.status_code == STATUS_UNAUTHORIZED:
-            return unauthorized()
-        if exc.status_code == STATUS_NOT_FOUND:
-            return not_found()
-        return generic_error(exc.status_code, ERROR_INVALID_REQUEST)
-
-    @app.exception_handler(RequestValidationError)
-    async def handle_validation_error(
-        _request: Request,
-        _exc: RequestValidationError,
-    ) -> JSONResponse:
-        return invalid_request()
-
-    @app.get("/healthz")
-    def healthz() -> JSONResponse:
-        return JSONResponse(content={"status": "ok", "label": DEMO_LABEL})
-
-    @app.get("/demo/state/{claim_id}")
-    def demo_state(claim_id: str) -> JSONResponse:
-        """Return the full canonical state.
-
-        This is the documented demonstration boundary. It stands in for looking at the database so
-        the walkthrough and the tests can prove byte-for-byte state without reading SQLite, and it
-        takes no part in the authorization contract under test.
-        """
-        with session_factory() as session:
-            claim = load_claim(session, claim_id)
-            if claim is None:
-                return not_found()
-            return JSONResponse(content={"label": DEMO_LABEL, "claim": canonical_state(claim)})
+    install_request_correlation(app)
+    install_generic_error_handlers(app)
+    app.include_router(create_demo_router(engine, session_factory))
 
     @app.get("/claims/{claim_id}")
     def read_claim(claim_id: str, request: Request) -> JSONResponse:

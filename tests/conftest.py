@@ -1,4 +1,4 @@
-"""Shared fixtures: one real loopback server, fresh fixture state, and captured service logs."""
+"""Shared fixtures: both variants served over real loopback, fresh state, and captured logs."""
 
 from __future__ import annotations
 
@@ -18,11 +18,12 @@ from fieldblind.observability import LOGGER_NAME
 from fieldblind.persistence import create_database_engine, reset_state
 from fieldblind.secure_app import create_secure_app
 from fieldblind.service import set_pre_commit_hook
+from fieldblind.vulnerable_app import create_vulnerable_app
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
+    from fastapi import FastAPI
     from sqlalchemy.engine import Engine
 
 SERVER_START_TIMEOUT_SECONDS = 15.0
@@ -30,7 +31,7 @@ SERVER_POLL_SECONDS = 0.01
 
 
 class RecordingHandler(logging.Handler):
-    """Collect every bounded JSON line the service emits."""
+    """Collect every bounded JSON line the services emit."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -68,23 +69,21 @@ class RecordingHandler(logging.Handler):
 
 @dataclass(frozen=True, slots=True)
 class LoopbackService:
-    """A running secure service plus the handles a test needs to inspect it."""
+    """A running service plus the handles a test needs to inspect it."""
 
     client: httpx.Client
     engine: Engine
     logs: RecordingHandler
 
 
-@pytest.fixture(scope="session")
-def _database_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return tmp_path_factory.mktemp("fieldblind") / "secure.db"
+@dataclass(slots=True)
+class _RunningServer:
+    server: uvicorn.Server
+    thread: threading.Thread
+    port: int
 
 
-@pytest.fixture(scope="session")
-def service(_database_path: Path) -> Iterator[LoopbackService]:
-    """Serve the secure app over real loopback HTTP for the whole session."""
-    settings = Settings(database_path=_database_path)
-    app = create_secure_app(settings)
+def _serve(app: FastAPI) -> _RunningServer:
     config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -94,27 +93,81 @@ def service(_database_path: Path) -> Iterator[LoopbackService]:
     while not server.started:
         if time.monotonic() > deadline:
             server.should_exit = True
-            pytest.fail("the loopback service did not become ready")
+            pytest.fail("a loopback service did not become ready")
         time.sleep(SERVER_POLL_SECONDS)
 
-    port = server.servers[0].sockets[0].getsockname()[1]
+    port: int = server.servers[0].sockets[0].getsockname()[1]
+    return _RunningServer(server=server, thread=thread, port=port)
+
+
+@dataclass(frozen=True, slots=True)
+class _Stack:
+    secure: LoopbackService
+    vulnerable: LoopbackService
+
+
+@pytest.fixture(scope="session")
+def _stack(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Stack]:
+    """Serve both variants for the whole session, each over its own disposable database."""
+    root = tmp_path_factory.mktemp("fieldblind")
+    secure_path = root / "secure.db"
+    vulnerable_path = root / "vulnerable.db"
+
+    secure_server = _serve(create_secure_app(Settings(database_path=secure_path)))
+    vulnerable_server = _serve(
+        create_vulnerable_app(
+            Settings(database_path=vulnerable_path, allow_vulnerable_demo=True),
+        ),
+    )
+
+    # Attach the recorder only after both lifespans have configured logging, so neither clears it.
     handler = RecordingHandler()
     logging.getLogger(LOGGER_NAME).addHandler(handler)
 
-    engine = create_database_engine(_database_path)
-    with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=10.0) as client:
-        yield LoopbackService(client=client, engine=engine, logs=handler)
+    with (
+        httpx.Client(base_url=f"http://127.0.0.1:{secure_server.port}", timeout=10.0) as secure,
+        httpx.Client(
+            base_url=f"http://127.0.0.1:{vulnerable_server.port}",
+            timeout=10.0,
+        ) as vulnerable,
+    ):
+        yield _Stack(
+            secure=LoopbackService(
+                client=secure,
+                engine=create_database_engine(secure_path),
+                logs=handler,
+            ),
+            vulnerable=LoopbackService(
+                client=vulnerable,
+                engine=create_database_engine(vulnerable_path),
+                logs=handler,
+            ),
+        )
 
     logging.getLogger(LOGGER_NAME).removeHandler(handler)
-    server.should_exit = True
-    thread.join(timeout=SERVER_START_TIMEOUT_SECONDS)
+    for running in (secure_server, vulnerable_server):
+        running.server.should_exit = True
+        running.thread.join(timeout=SERVER_START_TIMEOUT_SECONDS)
+
+
+@pytest.fixture(scope="session")
+def service(_stack: _Stack) -> LoopbackService:
+    """The secure service."""
+    return _stack.secure
+
+
+@pytest.fixture(scope="session")
+def vulnerable_service(_stack: _Stack) -> LoopbackService:
+    """The intentionally vulnerable service."""
+    return _stack.vulnerable
 
 
 @pytest.fixture(autouse=True)
-def _fresh_state(service: LoopbackService) -> Iterator[None]:
-    """Start every case from the same disposable fixture and no captured logs."""
+def _fresh_state(_stack: _Stack) -> Iterator[None]:
+    """Start every case from the same disposable fixture in both variants, and no captured logs."""
     set_pre_commit_hook(None)
-    reset_state(service.engine)
-    service.logs.reset()
+    reset_state(_stack.secure.engine)
+    reset_state(_stack.vulnerable.engine)
+    _stack.secure.logs.reset()
     yield
     set_pre_commit_hook(None)
