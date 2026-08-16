@@ -357,3 +357,18 @@ only default service; everything else needs a profile. Both services publish to 
 
 Educational, local-only, and not production software. It makes no outbound request, has no cloud
 configuration, and supports no hosting, deployment, or production authentication.
+
+Do not copy the `vulnerable` half into anything real: it is deliberately wrong, and that is its
+entire purpose. The `secure` half is a teaching illustration of the two property-authorization
+controls, not a drop-in authorization framework.
+
+## Reporting a problem
+
+The BOPLA behavior of the `vulnerable` service is intentional and documented — it is the
+demonstration, not a bug. For anything *unintended*, please report it privately through this
+repository's **Security** tab → **Report a vulnerability**, rather than opening a public issue.
+[`SECURITY.md`](SECURITY.md) describes what is in and out of scope.
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 maximalfocus.
